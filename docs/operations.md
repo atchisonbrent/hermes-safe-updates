@@ -23,6 +23,8 @@ Inspect the private `state.json` and configured stdout/stderr logs locally:
 
 Exit zero can mean disabled, busy lock, pending, unchanged, or successful. It is **not** a completion receipt by itself. Only an `OK` message plus independent live verification supports completion.
 
+Pre-drain failures such as unreadable repositories, corrupt state, or a missing service label exit 1 with `ERROR` on stderr; they may not create a blocked record. They recur on each scheduled invocation until corrected or disabled. The log files append without built-in rotation; include them in your normal log-retention policy.
+
 ## Recover
 
 Disable the enable sentinel and wait for the current coordinator invocation to exit before manual intervention. Preserve failure evidence. Check the native service logs and identify whether failure was preflight, drain, restart, or health.
@@ -45,4 +47,6 @@ Verify the coordinator label is absent. Keep the existing WebUI service running.
 
 ## Tests and evidence
 
-`python3 -m unittest discover -s tests -v` exercises the real coordinator CLI against temporary repositories, loopback HTTP, and a fake launchctl. It covers disabled initialization, revision detection, busy work, drain capability, malformed count, drain polling, generation failure/blocking, sentinel permissions, and syntax-preflight failure. It does not register a real job or exercise a real model turn. See setup acceptance checks for the remaining host-specific proof.
+Publication checks: 13 coordinator tests passed on Python 3.11 and 3.14. The seven bundled WebUI admission tests passed through WebUI's own test runner at `0f972f79442352eb7cb3a088915dbec58821f880`, in an isolated HOME/state with no credentials. The patch also passed application checking against its documented parent. These results do not certify another installation or a real service restart.
+
+`python3 -m unittest discover -s tests -v` exercises the real coordinator CLI against temporary repositories, loopback HTTP, and a fake launchctl. It covers disabled initialization, revision detection, busy work, drain capability, malformed count, drain polling, generation failure/blocking, sentinel/directory permissions, explicit drain-path enforcement, probe error reporting, and missing/invalid source preflight. It does not register a real job or exercise a real model turn. See setup acceptance checks for the remaining host-specific proof.

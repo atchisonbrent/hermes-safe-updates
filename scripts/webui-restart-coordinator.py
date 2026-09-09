@@ -32,7 +32,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--agent-dir", type=Path, default=home / ".hermes/hermes-agent")
     parser.add_argument("--webui-dir", type=Path, default=home / "hermes-webui")
     parser.add_argument("--state-dir", type=Path, default=home / ".hermes/webui/restart-coordinator")
-    parser.add_argument("--drain-dir", type=Path)
+    parser.add_argument("--drain-dir", type=Path, required=True,
+                        help="Exact private drain directory used by the running WebUI")
     parser.add_argument("--enabled-file", type=Path)
     parser.add_argument("--launchctl", type=Path, default=Path("/bin/launchctl"))
     parser.add_argument("--launch-label", default="local.hermes-webui")
@@ -130,7 +131,7 @@ def candidate_preflight(args: argparse.Namespace) -> None:
     )
     files = [args.webui_dir / relative for relative in relative_files if (args.webui_dir / relative).is_file()]
     if not files:
-        return
+        raise RuntimeError("no expected WebUI source files found; check --webui-dir")
     completed = subprocess.run(
         [str(interpreter), "-m", "py_compile", *map(str, files)],
         text=True,
@@ -256,7 +257,7 @@ def main() -> int:
             return 0
 
         pid = launchd_pid(args)
-        drain_dir = args.drain_dir or (args.state_dir / "restart-drain")
+        drain_dir = args.drain_dir
         marker = drain_dir / f"{pid}.json"
         atomic_json(
             marker,
@@ -306,4 +307,9 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    os.umask(0o077)
+    try:
+        raise SystemExit(main())
+    except EXPECTED_OPERATION_ERRORS as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        raise SystemExit(1)

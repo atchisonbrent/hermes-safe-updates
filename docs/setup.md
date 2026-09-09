@@ -10,11 +10,13 @@ Read [integration.md](integration.md). If the required interfaces are absent, as
 
 Verify the live deep-health endpoint without dumping session metadata into a shared transcript. It must return HTTP 200, `status: "ok"`, integer nonnegative `active_runs`, `restart_drain_supported: true`, numeric `server_started_at`, and a valid idle duration (`idle_seconds_since_last_run`, or uptime before the first run).
 
-Use `launchctl print gui/$(id -u)/YOUR_WEBUI_LABEL` and a listener/process inspection to verify the reported PID is **the WebUI Python PID**, not a parent wrapper. Both sides must use exactly the same drain directory. The WebUI reads `HERMES_WEBUI_RESTART_DRAIN_DIR`; configure that variable in its existing service environment if overriding its default. Keep this directory private to your OS user.
+Use `launchctl print gui/$(id -u)/YOUR_WEBUI_LABEL` and a listener/process inspection to verify the reported PID is **the WebUI Python PID**, not a parent wrapper. Both sides must use exactly the same drain directory; the coordinator requires explicit `--drain-dir` rather than guessing. The WebUI reads `HERMES_WEBUI_RESTART_DRAIN_DIR`; configure that variable in its existing service environment if overriding its default. Keep this directory private to your OS user.
 
 ## 2. Keep the coordinator independent
 
 Keep this clone outside the Agent/WebUI checkouts and virtual environments that updates replace. Use an absolute Python 3.10+ interpreter outside those environments. The coordinator itself has no third-party Python dependencies.
+
+Syntax preflight uses the Agent checkout's `venv/bin/python`, then `.venv/bin/python`, then the coordinator interpreter. Verify that selected interpreter matches WebUI's supported Python version; compilation does not establish runtime/dependency compatibility.
 
 Review `templates/local.hermes-safe-updates.plist`. Copy it to a staging file, replace every `__PLACEHOLDER__` with the actual absolute path/value, and XML-escape values (`&` becomes `&amp;`). Do not load the template itself. In particular:
 
@@ -23,7 +25,7 @@ Review `templates/local.hermes-safe-updates.plist`. Copy it to a staging file, r
 - `__HOME__`: OS user home, not profile home.
 - `__AGENT__`, `__WEBUI__`: actual Git checkouts.
 - `__STATE__`: new private coordinator state directory, separate from existing coordinators.
-- `__DRAIN__`: exact directory used by the running WebUI.
+- `__DRAIN__`: exact directory used by the running WebUI. The coordinator creates it if absent, so a typo is not rejected; verify both sides and the admission-rejection acceptance test rather than trusting directory existence.
 - `__WEBUI_LABEL__`: verified existing service label.
 - `__HEALTH_URL__`: direct loopback deep-health URL; do not embed credentials.
 

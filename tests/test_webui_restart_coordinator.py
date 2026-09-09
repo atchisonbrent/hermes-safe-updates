@@ -22,6 +22,7 @@ class WebUIRestartCoordinatorTests(unittest.TestCase):
         self.state = self.root / "state"
         self.agent.mkdir()
         self.webui.mkdir()
+        (self.webui / "server.py").write_text("# Disposable WebUI syntax fixture\n")
         self.state.mkdir()
         self.launch_calls = self.root / "launch-calls"
         self.kickstarted = self.root / "kickstarted"
@@ -114,6 +115,8 @@ class WebUIRestartCoordinatorTests(unittest.TestCase):
                 str(self.webui),
                 "--state-dir",
                 str(self.state),
+                "--drain-dir",
+                str(self.state / "restart-drain"),
                 "--launchctl",
                 str(self.launchctl),
                 "--health-url",
@@ -124,7 +127,36 @@ class WebUIRestartCoordinatorTests(unittest.TestCase):
             capture_output=True,
             check=False,
             timeout=10,
+            umask=0o022,
         )
+
+    def test_missing_explicit_drain_dir_is_rejected(self) -> None:
+        result = subprocess.run(
+            [sys.executable, str(SCRIPT), "--state-dir", str(self.state)],
+            text=True, capture_output=True, timeout=10,
+        )
+        self.assertEqual(2, result.returncode)
+        self.assertIn("--drain-dir", result.stderr)
+        self.assertFalse(self.launch_calls.exists())
+
+    def test_created_state_directory_is_private_under_permissive_umask(self) -> None:
+        self.init_repo(self.agent, "agent-one")
+        self.init_repo(self.webui, "webui-one")
+        enabled = self.enable()
+        private_state = self.root / "new-parent" / "state"
+        result = self.run_coordinator("--state-dir", str(private_state),
+                                      "--enabled-file", str(enabled))
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertEqual(0o700, private_state.stat().st_mode & 0o777)
+        self.assertEqual(0o700, private_state.parent.stat().st_mode & 0o777)
+
+    def test_missing_repository_reports_error_without_traceback(self) -> None:
+        self.enable()
+        result = self.run_coordinator()
+        self.assertEqual(1, result.returncode)
+        self.assertIn("ERROR:", result.stderr)
+        self.assertNotIn("Traceback", result.stderr)
+        self.assertFalse(self.launch_calls.exists())
 
     def test_disabled_without_enable_sentinel_is_side_effect_free(self) -> None:
         result = self.run_coordinator()
@@ -250,6 +282,14 @@ class WebUIRestartCoordinatorTests(unittest.TestCase):
 
         self.assertEqual(0, result.returncode, result.stderr)
         self.assertFalse((self.state / "state.json").exists())
+        self.assertFalse(self.launch_calls.exists())
+
+    def test_missing_candidate_source_never_enters_drain(self) -> None:
+        self.prepare_pending()
+        (self.webui / "server.py").unlink()
+        result = self.run_coordinator("--settle-seconds", "0", "--idle-seconds", "0")
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertIn("no expected WebUI source files", result.stderr)
         self.assertFalse(self.launch_calls.exists())
 
     def test_invalid_candidate_source_never_enters_drain(self) -> None:
