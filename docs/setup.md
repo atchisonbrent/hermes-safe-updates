@@ -1,5 +1,7 @@
 # Setup on macOS
 
+This page installs the optional **WebUI-only revision coordinator**. For Agent + gateway + WebUI together, start with [combined maintenance](combined-maintenance.md). Do not install this recurring job merely to use the combined helper; it must be disabled during a combined operation.
+
 Do not enable the coordinator until the running WebUI supports draining. Setup itself may require a manually approved restart to load that support.
 
 ## 1. Establish compatibility

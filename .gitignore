@@ -6,3 +6,4 @@ __pycache__/
 state.json
 enabled
 *.rendered.plist
+receipts/

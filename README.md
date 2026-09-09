@@ -1,10 +1,8 @@
 # Hermes safe updates
 
-Wait for work to finish before restarting Hermes WebUI.
+**Maintain Hermes Agent and standalone Hermes WebUI together, without cutting off running work.**
 
-A small, self-contained reference kit extracted from a working personal deployment: the restart coordinator, regression tests, WebUI admission-control patch, and setup/recovery guide. No private configuration, credentials, paid model, or private repository is required.
-
-**This is a restart coordinator, not an automatic updater.** You choose and test updates; it notices changed Agent/WebUI Git revisions, waits for idle, drains WebUI work, restarts through launchd, and checks for a healthy new server generation.
+This is a native-first maintenance kit: a combined operator/agent runbook, drain-and-verification helpers, and an optional WebUI restart coordinator. It uses Hermes's existing gateway control/drain mechanisms; it does not replace the native updater or build another service manager.
 
 ## Start here
 
@@ -12,38 +10,40 @@ A small, self-contained reference kit extracted from a working personal deployme
 git clone https://github.com/atchisonbrent/hermes-safe-updates.git
 cd hermes-safe-updates
 python3 -m unittest discover -s tests -v
-python3 scripts/webui-restart-coordinator.py --help
+python3 scripts/maintenance.py --help
 ```
 
-These commands do not install a service or restart Hermes. Tests use temporary Git repositories, a loopback HTTP server, and a fake service manager. Python 3.10+ and Git are required; the coordinator tests use only the standard library.
+Those commands do not drain, update, or restart anything. Python 3.10+ and Git are required; kit tests use only the standard library.
 
-- **[Setup](docs/setup.md)** — compatibility checks, first activation, service configuration, and verification.
-- **[Update and recovery runbook](docs/operations.md)** — prepare an update, interpret pending/blocked status, recover without a restart loop.
-- **[Integration contract](docs/integration.md)** — what the WebUI must implement; patch baseline and limits.
-- **[Agent handoff](AGENTS.md)** — boundaries for an agent setting this up.
+**[Combined Hermes + WebUI workflow →](docs/combined-maintenance.md)**
 
-## How it works
+1. Inventory all affected profiles/processes and record a compatible revision pair.
+2. Close admission to new work; request gateway and WebUI drains.
+3. Wait for gateway acknowledgement and zero work on both sides.
+4. Stop affected services, back up state, and use the native/manual update paths.
+5. Start both sides, verify new generations and gateway code, then check WebUI revision and a real conversation.
+6. If either side fails, keep maintenance closed and perform the documented operator-controlled recovery.
 
-1. Detect a changed Agent/WebUI revision pair and allow it to settle.
-2. Compile selected WebUI Python files and require healthy, well-formed telemetry.
-3. Wait for zero active runs and the configured quiet window.
-4. Create a process-specific drain marker. Compatible WebUI code refuses new work.
-5. Recheck active runs, restart the existing launchd job, and require a changed server-start identity plus healthy deep health.
-6. Record success, or block the failed revision pair for operator investigation.
+## What is included
 
-An open tab is not a running turn. A closed stream is not proof that the worker stopped. That is why this uses worker-lifecycle tracking rather than browser activity.
+| Component | Purpose |
+|---|---|
+| [`maintenance.py`](scripts/maintenance.py) | Inspect live gateways/WebUI; request/cancel owned drains; wait for both; verify replacements |
+| [Combined runbook](docs/combined-maintenance.md) | Native update commands, inventory, backups, service ordering, failure recovery, acceptance gates |
+| [Gateway contract](docs/gateway-contract.md) | Required native interfaces, compatibility and counting limits |
+| [WebUI integration patch](patches/webui-restart-drain.patch) | Narrow admission-control integration and regression tests |
+| [Optional restart coordinator](docs/setup.md) | Existing macOS WebUI-only revision watcher; disable during combined maintenance |
+| [Agent handoff](AGENTS.md) | Scope, approval boundaries, and verification instructions for another agent |
 
-## Supported boundary
+## Scope and limits
 
-- **macOS, per-user launchd, one WebUI process**, whose launchd PID is the Python WebUI process itself (an `exec` launcher is fine).
-- **Standalone `nesquena/hermes-webui` architecture**, with the documented active-run and drain interfaces. Not a claim of compatibility with every version, fork, or the built-in Hermes dashboard.
-- Linux users can run the isolated coordinator tests, but must implement and test a systemd adapter before deployment. No Linux service adapter is supplied.
-- The repository contains all *kit* source and guidance. Hermes Agent, Hermes WebUI, their dependencies, and a configured service remain prerequisites. The included patch is not a vendored WebUI distribution or a universal patch for arbitrary releases.
+- Reference deployment: **macOS, local user-owned runtimes, standalone `nesquena/hermes-webui`, and compatible Hermes gateway v1 control sockets**. Windows/named pipes, containers, remote runtimes, and multiplexed gateways are not covered by the combined helper. Linux service adaptation is not supplied.
+- Repeat `--gateway-home` for each separately running gateway using the updated Agent checkout. Missing native interfaces are a stop condition, not permission to substitute stale state files or fake health fields.
+- The helper does not discover every CLI, desktop backend, detached task, or scheduler. The operator must inventory and stop/protect untracked work before attesting it is safe.
+- **No automatic updates or rollback.** The operator chooses and runs updates, dependency installation, service lifecycle commands, and recovery. Native updater behavior can affect every profile; review its plan first.
+- **Not zero downtime or a global admission lock.** The WebUI marker race remains documented. Keep ingress closed and stop services before changing code/dependencies.
+- A healthy replacement is not a successful conversation. The helper verifies gateway code identity and both process generations, but the WebUI's loaded revision and real chat/reconnect require separate checks.
 
-## What it does not guarantee
+The optional old coordinator still restarts **WebUI only**. It is not the combined workflow and must not compete with it.
 
-No automatic Git updates, dependency transactions, code/database rollback, zero downtime, or protection for unrelated CLI/gateway/cron work. It restarts **WebUI only**, even when it detects Agent code changes. Updating dependencies or code in place can affect running processes *before* a restart; use a separately approved maintenance window for those changes.
-
-The marker protocol is a pragmatic cross-process gate, not a formally atomic distributed handoff. See [the race and verification limits](docs/integration.md#limits). New requests during maintenance receive a retryable error rather than being durably queued.
-
-MIT licensed. WebUI patch context retains its separate [copyright notice](patches/LICENSE). This is a community project, not an official Nous Research updater.
+MIT licensed. The WebUI patch preserves its [upstream copyright/license](patches/LICENSE). No private configuration, credentials, paid model, or private repository is needed. This is a community kit, not an official Nous Research updater.

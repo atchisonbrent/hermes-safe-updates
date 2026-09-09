@@ -1,4 +1,6 @@
-# Update and recovery runbook
+# Optional WebUI coordinator operations
+
+For **Hermes Agent + gateway + WebUI together**, use [combined-maintenance.md](combined-maintenance.md). This older page covers the WebUI-only revision watcher and is not a substitute for the combined workflow. Leave that watcher disabled during combined maintenance.
 
 ## Prepare, then activate
 
@@ -11,7 +13,7 @@
 7. When disk is ready, re-enable the existing coordinator without resetting `state.json`. It detects the changed pair, waits for settling and idle, then attempts the WebUI restart. If your updater already restarted it, verify independently; the coordinator can otherwise cause an extra restart because it compares stored revisions rather than loaded revision metadata.
 8. Verify new process generation, deep health, exact intended revisions, and a representative real chat/reconnect. Report **pending** until activation is observed; do not equate published source with a replaced runtime.
 
-Updating a separately running gateway requires its own work/health checks and restart plan. There is no full coupled updater in this kit.
+The combined runbook and `maintenance.py` now supply gateway/WebUI drain and replacement checks, with native updates and operator-controlled recovery. The optional coordinator described here still restarts WebUI only; neither tool is an automatic transactional updater.
 
 ## Read status
 
