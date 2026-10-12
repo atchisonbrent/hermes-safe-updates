@@ -40,7 +40,7 @@ There must be **one operator**, no active legacy WebUI coordinator, and no other
 
 `verify` requires replacement starts for every selected gateway and WebUI, gateways in running state at the exact expected full Agent SHA, and stable generations with healthy WebUI responses. It does not prove platform connectivity, WebUI loaded SHA, application/database compatibility, or an actual model turn. Its output is **replacement_observed**, not updated-and-healthy.
 
-Timeouts bound polling; a final in-progress snapshot can add its finite per-probe I/O budgets (two seconds per socket request and HTTP call per selected runtime). This is an operator tool, not a hard real-time deadline. Wait errors retain drains; verify errors do not mutate anything. Runtime/transport errors return JSON with a coarse error type rather than dumping service bodies. Use the checklist and local native logs to diagnose, without copying secrets into a shared transcript.
+Replacement-verification timeouts bound its polling; a final in-progress snapshot can add its finite per-probe I/O budgets (two seconds per socket request and HTTP call per selected runtime). This is an operator tool, not a hard real-time deadline. Wait errors retain drains; verify errors do not mutate anything. Runtime/transport errors return JSON with a coarse error type rather than dumping service bodies. Use the checklist and local native logs to diagnose, without copying secrets into a shared transcript.
 
 ## Provenance and acceptance
 

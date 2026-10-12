@@ -30,6 +30,7 @@ class MaintenanceTests(unittest.TestCase):
                        'gateway_state': 'running', 'active_agents': 0}
         self.health = {'status': 'ok', 'active_runs': 0,
                        'restart_drain_supported': True, 'server_started_at': 2.0}
+        self.http_unavailable = False
         owner = self
 
         class SocketHandler(socketserver.StreamRequestHandler):
@@ -40,6 +41,9 @@ class MaintenanceTests(unittest.TestCase):
 
         class HTTPHandler(BaseHTTPRequestHandler):
             def do_GET(self):
+                if owner.http_unavailable:
+                    self.send_error(503)
+                    return
                 data = json.dumps(owner.health).encode()
                 self.send_response(200)
                 self.end_headers()
@@ -111,6 +115,45 @@ class MaintenanceTests(unittest.TestCase):
         with self.assertRaises(FileNotFoundError):
             module.refresh_owned_marker(path, ticket)
         self.assertFalse(path.exists())
+
+    def test_live_transport_retry_recovers_and_cancellation_exits(self):
+        ticket = '11111111-1111-4111-8111-111111111111'
+        before = self.root / 'before.json'
+        before.write_text(self.run_cli('inspect').stdout)
+        self.assertEqual(0, self.run_cli('begin', '--ticket', ticket).returncode)
+        self.status['gateway_state'] = 'draining'
+        command = [sys.executable, str(SCRIPT), 'wait',
+                   '--gateway-home', str(self.home), '--webui-health-url', self.url,
+                   '--webui-drain-dir', str(self.drain), '--webui-pid', '5252',
+                   '--ticket', ticket, '--before', str(before), '--other-work-stopped',
+                   '--timeout', '0.1', '--quiet-seconds', '0.05']
+        self.http_unavailable = True
+        process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        try:
+            time.sleep(0.7)
+            self.assertIsNone(process.poll())
+            self.http_unavailable = False
+            stdout, stderr = process.communicate(timeout=5)
+            self.assertEqual(0, process.returncode, stderr)
+            self.assertEqual('drained_observed', json.loads(stdout)['status'])
+        finally:
+            if process.poll() is None:
+                process.terminate()
+            process.communicate(timeout=5)
+        self.health['active_runs'] = 1
+        process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        try:
+            time.sleep(0.3)
+            self.assertIsNone(process.poll())
+            self.assertEqual(0, self.run_cli('cancel', '--ticket', ticket).returncode)
+            process.communicate(timeout=5)
+            self.assertNotEqual(0, process.returncode)
+            self.assertFalse((self.home / '.drain_request.json').exists())
+            self.assertFalse((self.drain / '5252.json').exists())
+        finally:
+            if process.poll() is None:
+                process.terminate()
+            process.communicate(timeout=5)
 
     def test_begin_and_cancel_own_both_markers(self):
         ticket = '11111111-1111-4111-8111-111111111111'
