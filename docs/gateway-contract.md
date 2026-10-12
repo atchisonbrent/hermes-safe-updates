@@ -26,7 +26,7 @@ Native `gateway/drain_control.py` defines `<gateway-home>/.drain_request.json`. 
 
 The reference macOS contract uses an empty epoch (native non-Linux fallback). Presence is recognized as a request; the gateway asynchronously enters external drain without terminating in-flight turns. **Do not interpret marker creation as acknowledgement.** `wait` requires `gateway_state: draining` and zero work from the live socket.
 
-Native markers expire after an hour. The helper neither renews them nor promises a persistent lock across machine restarts; it refuses waits on markers older than 30 minutes. Complete the transition to stopped services promptly. Keep upstream admission closed until operator verification finishes.
+Native markers have a one-hour lease. While waiting, the helper renews only its owned markers, without recreating a cancelled marker. Idle waits have no elapsed-time expiry. Cancellation, changed ownership/generation and malformed health still stop the operation. This is not a persistent lock across machine restarts. After the waiter returns, complete the transition to stopped services promptly and keep upstream admission closed until verification finishes.
 
 `cancel` removes only existing regular files owned by the current OS user with this ticket, after checking all selected markers. It works while services are stopped. Absence is idempotent; a foreign, symlink, or corrupt marker is an error. A partial begin may leave markers for explicit cancellation. Crash during marker writing can leave a malformed file requiring manual investigation. No watchdog silently releases maintenance.
 

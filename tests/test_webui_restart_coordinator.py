@@ -44,12 +44,19 @@ class WebUIRestartCoordinatorTests(unittest.TestCase):
         }
         self.advance_generation_on_kickstart = True
         self.drain_active_sequence: list[int] = []
+        self.drain_error = False
+        self.drain_generation_change = False
         owner = self
 
         class HealthHandler(BaseHTTPRequestHandler):
             def do_GET(self) -> None:
                 payload = dict(owner.health)
                 marker = owner.state / "restart-drain" / "4242.json"
+                if marker.exists() and owner.drain_error:
+                    self.send_error(503)
+                    return
+                if marker.exists() and owner.drain_generation_change:
+                    payload["server_started_at"] = 99.0
                 if marker.exists() and owner.drain_active_sequence:
                     payload["active_runs"] = owner.drain_active_sequence.pop(0)
                 if owner.kickstarted.exists() and owner.advance_generation_on_kickstart:
@@ -232,20 +239,39 @@ class WebUIRestartCoordinatorTests(unittest.TestCase):
         self.prepare_pending()
         self.drain_active_sequence = [1, 1, 0]
 
-        result = self.run_coordinator(
-            "--settle-seconds",
-            "0",
-            "--idle-seconds",
-            "0",
-            "--drain-timeout",
-            "3",
-            "--post-health-timeout",
-            "3",
-        )
+        args = ("--settle-seconds", "0", "--idle-seconds", "0",
+                "--drain-timeout", "0.01", "--post-health-timeout", "3")
+        for _ in range(2):
+            pending = self.run_coordinator(*args)
+            self.assertEqual(0, pending.returncode, pending.stderr)
+            self.assertFalse(self.kickstarted.exists())
+            self.assertFalse((self.state / "restart-drain" / "4242.json").exists())
+            state = json.loads((self.state / "state.json").read_text())
+            self.assertIn("pending", state)
+            self.assertNotIn("blocked", state)
+        result = self.run_coordinator(*args)
 
         self.assertEqual(0, result.returncode, result.stderr)
         self.assertEqual([], self.drain_active_sequence)
         self.assertTrue(self.kickstarted.exists())
+
+    def test_drain_probe_transport_failure_remains_pending(self) -> None:
+        self.prepare_pending()
+        self.drain_error = True
+        result = self.run_coordinator('--settle-seconds', '0', '--idle-seconds', '0')
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertIn('pending', json.loads((self.state / 'state.json').read_text()))
+        self.assertFalse(self.kickstarted.exists())
+        self.assertFalse((self.state / 'restart-drain' / '4242.json').exists())
+
+    def test_drain_generation_change_still_refuses_restart(self) -> None:
+        self.prepare_pending()
+        self.drain_generation_change = True
+        result = self.run_coordinator('--settle-seconds', '0', '--idle-seconds', '0')
+        self.assertEqual(1, result.returncode)
+        self.assertIn('blocked', json.loads((self.state / 'state.json').read_text()))
+        self.assertFalse(self.kickstarted.exists())
+        self.assertFalse((self.state / 'restart-drain' / '4242.json').exists())
 
     def test_failed_new_generation_blocks_revision_without_retry_loop(self) -> None:
         self.prepare_pending()

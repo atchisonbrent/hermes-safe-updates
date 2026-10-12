@@ -31,7 +31,7 @@ Review `templates/local.hermes-safe-updates.plist`. Copy it to a staging file, r
 - `__WEBUI_LABEL__`: verified existing service label.
 - `__HEALTH_URL__`: direct loopback deep-health URL; do not embed credentials.
 
-The template uses 120 seconds of revision settling and 30 seconds idle. Review these as policy, not universal tuning. Keep all timeouts positive. Do not enable two coordinators for one WebUI.
+The template uses 120 seconds of revision settling and 30 seconds idle. Review these as policy, not universal tuning. Busy revisions remain pending across native ticks without expiry; the coordinator releases its temporary marker when a turn wins the admission race. It does not hold admission closed while waiting. Idle/drain waits never expire; `--drain-timeout` is accepted only for backward compatibility and ignored. Keep command and post-restart health timeouts positive. Do not enable two coordinators for one WebUI.
 
 Create the state and drain directories with mode 0700, owned by the service user. Do not grant other users write access. Check that the rendered plist has no placeholders, validate it with `plutil -lint /absolute/path/to/rendered.plist`, and inspect `ProgramArguments` and log paths. A valid plist alone does not prove the paths exist or identify the correct service.
 

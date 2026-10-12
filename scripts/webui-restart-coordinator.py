@@ -40,7 +40,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--health-url", default="http://127.0.0.1:8787/health?deep=1")
     parser.add_argument("--settle-seconds", type=float, default=120.0)
     parser.add_argument("--idle-seconds", type=float, default=300.0)
-    parser.add_argument("--drain-timeout", type=float, default=120.0)
+    parser.add_argument("--drain-timeout", type=float, default=120.0,
+                        help="Deprecated compatibility argument; idle waits never expire")
     parser.add_argument("--post-health-timeout", type=float, default=60.0)
     parser.add_argument("--poll-seconds", type=float, default=0.25)
     parser.add_argument("--command-timeout", type=float, default=15.0)
@@ -269,17 +270,20 @@ def main() -> int:
         )
 
         try:
-            deadline = time.monotonic() + args.drain_timeout
-            while True:
+            try:
                 drained = fetch_health(args.health_url, min(2.0, args.command_timeout))
-                active_runs, observed_started = strict_health(drained)
-                if observed_started != before_started:
-                    raise RuntimeError("WebUI generation changed before coordinated restart")
-                if active_runs == 0:
-                    break
-                if time.monotonic() >= deadline:
-                    raise RuntimeError("WebUI did not drain active runs before deadline")
-                time.sleep(args.poll_seconds)
+            except OSError as exc:
+                marker.unlink(missing_ok=True)
+                print(f"PENDING: health probe unavailable: {exc}", file=sys.stderr)
+                return 0
+            active_runs, observed_started = strict_health(drained)
+            if observed_started != before_started:
+                raise RuntimeError("WebUI generation changed before coordinated restart")
+            if active_runs != 0:
+                # A turn won the admission race. Keep the revision pending for
+                # the next native tick; elapsed time never expires this work.
+                marker.unlink(missing_ok=True)
+                return 0
             restart(args, before_started)
         except EXPECTED_OPERATION_ERRORS as exc:
             marker.unlink(missing_ok=True)

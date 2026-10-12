@@ -57,16 +57,16 @@ With operator approval:
 "$PYTHON" "$KIT/scripts/maintenance.py" begin "${COMMON[@]}" --ticket "$TICKET"
 "$PYTHON" "$KIT/scripts/maintenance.py" wait "${COMMON[@]}" \
   --ticket "$TICKET" --before "$RECEIPTS/before.json" \
-  --other-work-stopped --timeout 300 --quiet-seconds 3
+  --other-work-stopped --quiet-seconds 3
 ```
 
 `--other-work-stopped` is a **human/agent attestation after inventory**, not automated detection. It includes detached background work, not just CLI sessions. Never add it automatically to silence a refusal.
 
-`begin` writes native-compatible gateway markers and the WebUI PID marker. It refuses existing markers, never overwrites another operation, and returns **drain_requested**, not idle. Gateway acknowledgement is asynchronous. `wait` requires every gateway to answer `draining` with `active_agents == 0`, WebUI `active_runs == 0`, owned markers, unchanged generations, and a quiet observation window. A failed probe aborts the wait; nothing is restarted.
+`begin` writes native-compatible gateway markers and the WebUI PID marker. It refuses existing markers, never overwrites another operation, and returns **drain_requested**, not idle. Gateway acknowledgement is asynchronous. `wait` requires every gateway to answer `draining` with `active_agents == 0`, WebUI `active_runs == 0`, owned markers, unchanged generations, and a quiet observation window. A transport failure resets the quiet window and keeps waiting; malformed health, ownership or generation changes abort safely. Nothing is restarted by the helper.
 
-A timeout/error leaves markers in place for explicit cancellation. Partial marker creation can occur if a write fails; inspect exact paths and cancel this ticket. Never run another writer concurrently. Parent directories must already exist, be owned by the OS user, and not be group/world writable.
+An error leaves markers in place for explicit cancellation. Waiting for idle has no elapsed-time expiry; `--timeout` applies only to replacement verification. Partial marker creation can occur if a write fails; inspect exact paths and cancel this ticket. Never run another writer concurrently. Parent directories must already exist, be owned by the OS user, and not be group/world writable.
 
-**Do not sleep indefinitely after the gate.** Native gateway markers expire after one hour; this helper refuses to wait on markers older than 30 minutes and does not refresh them. Complete the transition to stopped services promptly. A marker is not a durable maintenance lock.
+**Do not sleep indefinitely after the gate.** The waiter renews its owned native gateway leases while busy, for as long as needed. Once it returns, renewal stops; complete the transition to stopped services promptly. A marker is not a durable maintenance lock.
 
 ## 4. Stop, back up, update the pair
 

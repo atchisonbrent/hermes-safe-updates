@@ -202,17 +202,43 @@ def verify_replacement(args):
     raise ValueError('replacement verification timed out; operator recovery required')
 
 
+def refresh_owned_marker(path, ticket):
+    # Renew the native one-hour lease without recreating a cancelled marker.
+    # Keep the same inode: cancel can unlink it and the next probe will fail.
+    fd = os.open(path, os.O_RDWR | os.O_NOFOLLOW)
+    with os.fdopen(fd, 'r+') as stream:
+        info = os.fstat(stream.fileno())
+        if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid():
+            raise ValueError('marker is not a regular file owned by this user')
+        data = json.load(stream)
+        if not isinstance(data, dict) or data.get('maintenance_ticket') != ticket:
+            raise ValueError('marker belongs to another maintenance operation')
+        age = (datetime.now(timezone.utc) - datetime.fromisoformat(data['requested_at'])).total_seconds()
+        if age < 0:
+            raise ValueError('drain marker is future-dated')
+        if age >= 60:
+            data['requested_at'] = datetime.now(timezone.utc).isoformat()
+            stream.seek(0)
+            json.dump(data, stream)
+            stream.truncate()
+            stream.flush()
+            os.fsync(stream.fileno())
+
+
 def wait_for_drain(args):
     before = baseline(args)
-    deadline = time.monotonic() + args.timeout
     quiet_since = None
-    while time.monotonic() < deadline:
+    while True:
         for path in markers(args):
-            marker = owned_marker(path, args.ticket)
-            age = (datetime.now(timezone.utc) - datetime.fromisoformat(marker['requested_at'])).total_seconds()
-            if not 0 <= age < 1800:
-                raise ValueError('drain marker too old; native drain expires after one hour')
-        current = snapshot(args)
+            refresh_owned_marker(path, args.ticket)
+        try:
+            current = snapshot(args)
+        except OSError:
+            # Transport failures do not spend an idle-wait budget. Owned
+            # leases continue renewing; no unknown sample can prove idle.
+            quiet_since = None
+            time.sleep(1)
+            continue
         if generations(current) != generations(before):
             raise ValueError('runtime generation changed while waiting')
         idle = (all(g['state'] == 'draining' and g['active_agents'] == 0 for g in current['gateways'])
@@ -222,8 +248,7 @@ def wait_for_drain(args):
         if quiet_since is not None and now - quiet_since >= args.quiet_seconds:
             return {'status': 'drained_observed', 'snapshot': current,
                     'note': 'Not a global lock. Keep ingress closed and stop services before mutation.'}
-        time.sleep(min(0.1, max(0, deadline - time.monotonic())))
-    raise ValueError('drain timeout; no services stopped, markers retained for explicit cancel')
+        time.sleep(0.1)
 
 
 def parse_args():
@@ -231,7 +256,7 @@ def parse_args():
     parser.add_argument('action', choices=['inspect', 'begin', 'cancel', 'wait', 'verify'])
     parser.add_argument('--expect-agent-sha', help='Exact full lowercase Git SHA expected from every gateway')
     parser.add_argument('--before', type=Path, help='Saved inspect JSON from before maintenance')
-    parser.add_argument('--timeout', type=float, default=300)
+    parser.add_argument('--timeout', type=float, default=300, help='Replacement verification only; idle waits never expire')
     parser.add_argument('--quiet-seconds', type=float, default=3)
     parser.add_argument('--other-work-stopped', action='store_true',
                         help='Attest all CLI, other profiles/backends and standalone schedulers are stopped or separately protected')
@@ -258,9 +283,11 @@ def parse_args():
         parser.error('wait requires --before and --other-work-stopped attestation')
     if args.action == 'verify' and (not args.before or not re.fullmatch('[0-9a-f]{40}', args.expect_agent_sha or '')):
         parser.error('verify requires --before and exact 40-character --expect-agent-sha')
-    if not (math.isfinite(args.timeout) and math.isfinite(args.quiet_seconds)
-            and 0 < args.quiet_seconds < args.timeout <= 1800):
-        parser.error('require 0 < quiet-seconds < timeout <= 1800')
+    if not math.isfinite(args.quiet_seconds) or args.quiet_seconds <= 0:
+        parser.error('quiet-seconds must be finite and positive')
+    if args.action == 'verify' and not (math.isfinite(args.timeout)
+            and args.quiet_seconds < args.timeout <= 1800):
+        parser.error('verification requires quiet-seconds < timeout <= 1800')
     return args
 
 

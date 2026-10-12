@@ -1,5 +1,7 @@
 """Real CLI tests with disposable HTTP/Unix-socket runtime fixtures."""
+import importlib.util
 import json
+from datetime import datetime, timedelta, timezone
 import os
 from pathlib import Path
 import socketserver
@@ -7,6 +9,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -71,6 +74,44 @@ class MaintenanceTests(unittest.TestCase):
         ], text=True, capture_output=True, timeout=10,
             env={'HOME': str(self.root), 'PATH': os.environ['PATH']})
 
+    def assert_wait_pending(self, *args):
+        # Observe the real CLI past its former timeout, then explicitly cancel
+        # this test process. The production waiter must never expire itself.
+        command = [sys.executable, str(SCRIPT), 'wait',
+                   '--gateway-home', str(self.home), '--webui-health-url', self.url,
+                   '--webui-drain-dir', str(self.drain), '--webui-pid', '5252', *args]
+        process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                   text=True)
+        try:
+            time.sleep(0.7)
+            self.assertIsNone(process.poll(), process.communicate() if process.poll() is not None else '')
+        finally:
+            if process.poll() is None:
+                process.terminate()
+            process.communicate(timeout=5)
+
+    def test_native_lease_renews_without_recreating_cancelled_or_foreign_marker(self):
+        spec = importlib.util.spec_from_file_location('maintenance', SCRIPT)
+        assert spec is not None and spec.loader is not None
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        path = self.home / '.drain_request.json'
+        ticket = '11111111-1111-4111-8111-111111111111'
+        old = (datetime.now(timezone.utc) - timedelta(days=3)).isoformat()
+        path.write_text(json.dumps(dict(maintenance_ticket=ticket, requested_at=old)))
+        inode = path.stat().st_ino
+        module.refresh_owned_marker(path, ticket)
+        self.assertEqual(inode, path.stat().st_ino)
+        self.assertNotEqual(old, json.loads(path.read_text())['requested_at'])
+        retained = path.read_bytes()
+        with self.assertRaises(ValueError):
+            module.refresh_owned_marker(path, 'another-owner')
+        self.assertEqual(retained, path.read_bytes())
+        path.unlink()
+        with self.assertRaises(FileNotFoundError):
+            module.refresh_owned_marker(path, ticket)
+        self.assertFalse(path.exists())
+
     def test_begin_and_cancel_own_both_markers(self):
         ticket = '11111111-1111-4111-8111-111111111111'
         result = self.run_cli('begin', '--ticket', ticket)
@@ -96,13 +137,13 @@ class MaintenanceTests(unittest.TestCase):
         options = ('--ticket', ticket, '--before', str(before), '--timeout', '0.3',
                    '--quiet-seconds', '0.05', '--other-work-stopped')
         # A request on disk without gateway acknowledgement is NOT drained.
-        self.assertNotEqual(0, self.run_cli('wait', *options).returncode)
+        self.assert_wait_pending(*options)
         self.status['gateway_state'] = 'draining'
         self.status['active_agents'] = 1
-        self.assertNotEqual(0, self.run_cli('wait', *options).returncode)
+        self.assert_wait_pending(*options)
         self.status['active_agents'] = 0
         self.health['active_runs'] = 1
-        self.assertNotEqual(0, self.run_cli('wait', *options).returncode)
+        self.assert_wait_pending(*options)
         self.health['active_runs'] = 0
         ready = self.run_cli('wait', *options)
         self.assertEqual(0, ready.returncode, ready.stderr)
@@ -204,7 +245,7 @@ class MaintenanceTests(unittest.TestCase):
             self.status['gateway_state'] = 'draining'
             wait = (*extra, '--ticket', ticket, '--before', str(before), '--other-work-stopped',
                     '--timeout', '0.4', '--quiet-seconds', '0.05')
-            self.assertNotEqual(0, self.run_cli('wait', *wait).returncode)
+            self.assert_wait_pending(*wait)
             status['active_agents'] = 0
             self.assertEqual(0, self.run_cli('wait', *wait).returncode)
             self.assertEqual(0, self.run_cli('cancel', *extra, '--ticket', ticket).returncode)
